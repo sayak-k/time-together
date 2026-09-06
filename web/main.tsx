@@ -32,16 +32,26 @@ type DailyTotal = {
   label: string;
   fullLabel: string;
   dateTime: string;
+  isToday: boolean;
   totalMs: number;
   activities: DailyActivityTotal[];
 };
 
-function dailyActivityTotals(sessions: Session[], now: number, numberOfDays = 7): DailyTotal[] {
+function startOfWeek(now: number) {
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
-  const days = Array.from({length: numberOfDays}, (_, index) => {
-    const start = new Date(today);
-    start.setDate(today.getDate() - (numberOfDays - 1 - index));
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  return monday;
+}
+
+function dailyActivityTotals(sessions: Session[], now: number): DailyTotal[] {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const monday = startOfWeek(now);
+  const days = Array.from({length: 7}, (_, index) => {
+    const start = new Date(monday);
+    start.setDate(monday.getDate() + index);
     const end = new Date(start);
     end.setDate(start.getDate() + 1);
     return {
@@ -71,13 +81,14 @@ function dailyActivityTotals(sessions: Session[], now: number, numberOfDays = 7)
     }
   }
 
-  return days.map((day, index) => {
+  return days.map(day => {
     const activities = [...day.activities.values()].sort((a, b) => a.name.localeCompare(b.name));
     return {
       key: `${day.date.getFullYear()}-${day.date.getMonth() + 1}-${day.date.getDate()}`,
-      label: index === numberOfDays - 1 ? 'Today' : day.date.toLocaleDateString(undefined, {weekday: 'short', day: 'numeric'}),
+      label: day.date.toLocaleDateString(undefined, {weekday: 'short', day: 'numeric'}),
       fullLabel: day.date.toLocaleDateString(undefined, {weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'}),
       dateTime: `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, '0')}-${String(day.date.getDate()).padStart(2, '0')}`,
+      isToday: day.start === today.getTime(),
       totalMs: activities.reduce((sum, activity) => sum + activity.durationMs, 0),
       activities,
     };
@@ -90,7 +101,7 @@ function DailyActivityChart({sessions, now}: {sessions: Session[]; now: number})
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return <figure className="daily-chart">
-    <figcaption className="daily-chart-heading"><div><h3>Your week at a glance</h3><p>Total time by activity each day</p></div><span>Last 7 days</span></figcaption>
+    <figcaption className="daily-chart-heading"><div><h3>Your week at a glance</h3><p>Total time by activity each day</p></div><span>Monday–Sunday</span></figcaption>
     {legend.length > 0 && <div className="daily-chart-legend" aria-label="Activity colours">{legend.map(activity => <span key={activity.id}><i style={{background: activity.color}}/>{activity.name}</span>)}</div>}
     <div className="daily-chart-plot">
       <div className="daily-chart-y-axis" aria-hidden="true">{DAILY_CHART_TICKS.map(hours => <span key={hours}>{hours}h</span>)}</div>
@@ -100,7 +111,7 @@ function DailyActivityChart({sessions, now}: {sessions: Session[]; now: number})
           {days.map(day => {
             const breakdown = day.activities.map(activity => `${activity.name}: ${compactDuration(activity.durationMs)}`).join(', ');
             const barHeight = Math.min(100, (day.totalMs / DAILY_CHART_MAX_MS) * 100);
-            return <div className="daily-chart-column" key={day.key} role="img" aria-label={`${day.fullLabel}: ${day.totalMs ? `${compactDuration(day.totalMs)} total. ${breakdown}` : 'No time tracked'}`}>
+            return <div className={`daily-chart-column ${day.isToday ? 'is-today' : ''}`} key={day.key} role="img" aria-label={`${day.fullLabel}: ${day.totalMs ? `${compactDuration(day.totalMs)} total. ${breakdown}` : 'No time tracked'}`}>
               <div className="daily-chart-bar-slot">
                 {day.totalMs > 0 && <div className="daily-chart-bar" style={{height: `${barHeight}%`}} aria-hidden="true">
                   {day.activities.map(activity => <span key={activity.id} className="daily-chart-segment" style={{background: activity.color, flexGrow: activity.durationMs}} title={`${activity.name}: ${compactDuration(activity.durationMs)}`}/>) }
@@ -162,9 +173,7 @@ function App() {
     setConfirmed({activities: false, sessions: false, state: false});
     if (!user || !db) return;
     const fail = (e: unknown) => {setError(friendly(e)); setConfirmed({activities: false, sessions: false, state: false});};
-    const chartStart = new Date();
-    chartStart.setHours(0, 0, 0, 0);
-    chartStart.setDate(chartStart.getDate() - 6);
+    const chartStart = startOfWeek(Date.now());
     const unsub = [
       onSnapshot(query(collection(db, 'users', user.uid, 'activities'), orderBy('createdAt')), {includeMetadataChanges: true}, snap => {
         setActivities(snap.docs.map(d => ({...d.data(), id: d.id} as Activity)));
