@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env.local
+.firebase/
+*-debug.log
+firebase.config.json
+.firebaserc
+android/local.properties
+android/app/src/main/assets/firebase.config.json

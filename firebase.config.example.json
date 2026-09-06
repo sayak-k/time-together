@@ -1,0 +1,8 @@
+{
+  "apiKey": "FROM_FIREBASE_WEB_APP_CONFIG",
+  "androidApiKey": "FROM_FIREBASE_ANDROID_APP_CONFIG",
+  "authDomain": "YOUR_PROJECT.firebaseapp.com",
+  "projectId": "YOUR_PROJECT",
+  "appId": "FROM_FIREBASE_WEB_APP_CONFIG",
+  "androidAppId": "FROM_FIREBASE_ANDROID_APP_CONFIG"
+}

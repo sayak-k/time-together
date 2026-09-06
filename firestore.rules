@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    function statePath(uid) { return /databases/$(database)/documents/users/$(uid)/state/timer; }
+    function sessionPath(uid, id) { return /databases/$(database)/documents/users/$(uid)/sessions/$(id); }
+    function activeBefore(uid) { return exists(statePath(uid)) ? get(statePath(uid)).data.activeSessionId : null; }
+    function validNext(uid, id) {
+      return id == null || (id is string && id.size() <= 128 &&
+        getAfter(sessionPath(uid, id)).data.startedAt == request.time &&
+        getAfter(sessionPath(uid, id)).data.endedAt == null);
+    }
+    function closedPrevious(uid) {
+      let previous = activeBefore(uid);
+      return previous == null || getAfter(sessionPath(uid, previous)).data.endedAt == request.time;
+    }
+    match /users/{uid}/activities/{id} {
+      allow read: if owner(uid);
+      allow create: if owner(uid) && request.resource.data.keys().hasOnly(['name', 'color', 'createdAt']) &&
+        request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 80 &&
+        request.resource.data.color is string && request.resource.data.color.matches('#[0-9a-fA-F]{6}') &&
+        request.resource.data.createdAt == request.time;
+      // Version 1 has immutable activity definitions; archive/rename needs a separate sync design.
+    }
+    match /users/{uid}/state/timer {
+      allow read: if owner(uid);
+      allow create: if owner(uid) && request.resource.data.keys().hasOnly(['activeSessionId', 'revision', 'updatedAt']) &&
+        request.resource.data.activeSessionId == null && request.resource.data.revision == 0 &&
+        request.resource.data.updatedAt == request.time;
+      allow create, update: if owner(uid) &&
+        request.resource.data.keys().hasOnly(['activeSessionId', 'revision', 'updatedAt']) &&
+        request.resource.data.updatedAt == request.time && request.resource.data.revision is int &&
+        request.resource.data.revision == (exists(statePath(uid)) ? resource.data.revision + 1 : 1) &&
+        request.resource.data.activeSessionId != activeBefore(uid) &&
+        validNext(uid, request.resource.data.activeSessionId) && closedPrevious(uid);
+    }
+    match /users/{uid}/sessions/{id} {
+      allow read: if owner(uid);
+      allow create: if owner(uid) && request.resource.data.keys().hasOnly(['activityId', 'name', 'color', 'comment', 'startedAt', 'endedAt']) &&
+        request.resource.data.activityId is string &&
+        request.resource.data.name == get(/databases/$(database)/documents/users/$(uid)/activities/$(request.resource.data.activityId)).data.name &&
+        request.resource.data.color == get(/databases/$(database)/documents/users/$(uid)/activities/$(request.resource.data.activityId)).data.color &&
+        request.resource.data.comment is string && request.resource.data.comment.size() <= 2000 &&
+        request.resource.data.startedAt == request.time && request.resource.data.endedAt == null &&
+        getAfter(statePath(uid)).data.activeSessionId == id && activeBefore(uid) != id;
+      allow update: if owner(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['endedAt']) &&
+        resource.data.endedAt == null && request.resource.data.endedAt == request.time &&
+        request.resource.data.endedAt >= resource.data.startedAt && activeBefore(uid) == id &&
+        getAfter(statePath(uid)).data.activeSessionId != id;
+    }
+    // All other paths and deletions are denied.
+  }
+}
