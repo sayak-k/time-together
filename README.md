@@ -21,7 +21,8 @@ Firebase project: `time-together-sayak-20260905`
 - Email/password login using the same account on Android and the web.
 - One active timer across devices; starting another activity closes the previous session.
 - Online start, stop, and switch with server timestamps and atomic database transactions.
-- Activity names, colours, session notes and new completed sessions are shared.
+- Activity names, colours, session notes and new completed sessions are shared. Activities can
+  be renamed or deleted on the web; their historical sessions remain intact.
 - The web displays the latest 100 sessions and exports all history as JSON.
 - Android's regular timer cards use the shared backend when sync is enabled. Firestore
   sessions are projected into its existing Room database for the native history/statistics UI.
@@ -37,9 +38,9 @@ display an older state while Android is suspended. Immediate background refresh 
 This version does **not** sync historical record edits/deletes, tags, goals, Pomodoro,
 retroactive tracking, fixed-duration activities, or existing local history. Native edits
 to projected cloud history are local only and may be replaced during the next sync;
-avoid editing cloud sessions through the original native edit screens. Activity definitions
-in Firestore are immutable in this version. Existing Android activity names/colours are
-copied on import, not continuously mirrored when edited later.
+avoid editing cloud sessions through the original native edit screens. Existing Android
+activities are copied on import; later web renames are mirrored and web deletions archive
+the corresponding Android activity without removing its historical records.
 
 The fork has its own package ID (`com.razeeman.util.simpletimetracker.sync`, plus `.debug`
 for the debug APK), so it installs alongside the original app. Do not uninstall the original
@@ -140,7 +141,7 @@ See `android/LICENSE.md` and `android/README.md`. Preserve these notices with an
 
 ## Architecture
 
-`users/{uid}/activities/{id}` stores immutable activity definitions.
+`users/{uid}/activities/{id}` stores current activity definitions.
 `users/{uid}/sessions/{id}` stores `activityId`, a name/colour snapshot, a note, start/end timestamps.
 `users/{uid}/state/timer` stores the active session ID and monotonically increasing revision.
 Every start/stop transaction changes the session and shared state together. Server rules

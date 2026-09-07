@@ -14,13 +14,21 @@ service cloud.firestore {
       let previous = activeBefore(uid);
       return previous == null || getAfter(sessionPath(uid, previous)).data.endedAt == request.time;
     }
+    function activeActivity(uid) {
+      let active = activeBefore(uid);
+      return active == null ? null : get(sessionPath(uid, active)).data.activityId;
+    }
     match /users/{uid}/activities/{id} {
       allow read: if owner(uid);
       allow create: if owner(uid) && request.resource.data.keys().hasOnly(['name', 'color', 'createdAt']) &&
         request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 80 &&
         request.resource.data.color is string && request.resource.data.color.matches('#[0-9a-fA-F]{6}') &&
         request.resource.data.createdAt == request.time;
-      // Version 1 has immutable activity definitions; archive/rename needs a separate sync design.
+      allow update: if owner(uid) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
+        request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 80;
+      // Session documents keep their own name and colour snapshots, so deletion does not remove history.
+      allow delete: if owner(uid) && activeActivity(uid) != id;
     }
     match /users/{uid}/state/timer {
       allow read: if owner(uid);

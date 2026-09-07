@@ -2,8 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { after, before, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initializeTestEnvironment, assertFails } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
-import { createActivity, startTimer, stopTimer } from '../web/cloud.ts';
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { createActivity, deleteActivity, renameActivity, startTimer, stopTimer } from '../web/cloud.ts';
 
 let env;
 before(async () => {
@@ -69,6 +69,8 @@ test('another account and signed-out clients cannot read or write private data',
   for (const db of [client('bob'), env.unauthenticatedContext().firestore()]) {
     await assertFails(getDoc(session(db, id)));
     await assertFails(getDocs(collection(db, 'users/alice/activities')));
+    await assertFails(updateDoc(doc(db, 'users/alice/activities/work'), {name: 'Stolen'}));
+    await assertFails(deleteDoc(doc(db, 'users/alice/activities/work')));
     await assertFails(updateDoc(session(db, id), {endedAt: serverTimestamp()}));
   }
 });
@@ -91,6 +93,31 @@ test('rules deny invalid activity input and extra fields', async () => {
   await assertFails(setDoc(doc(db, 'users/alice/activities/bad'), {name:'', color:'#35705a', createdAt:serverTimestamp()}));
   await assertFails(setDoc(doc(db, 'users/alice/activities/bad'), {name:'Work', color:'red', createdAt:serverTimestamp()}));
   await assertFails(setDoc(doc(db, 'users/alice/activities/bad'), {name:'Work', color:'#35705a', createdAt:serverTimestamp(), owner:'bob'}));
+});
+test('renaming an activity leaves existing session snapshots unchanged', async () => {
+  const db = client(); await seed(db);
+  const id = await startTimer(db, 'alice', 'work', null); await stopTimer(db, 'alice', id);
+  await renameActivity(db, 'alice', 'work', 'Deep work');
+  assert.equal((await getDoc(doc(db, 'users/alice/activities/work'))).data().name, 'Deep work');
+  assert.equal((await getDoc(session(db, id))).data().name, 'Work');
+});
+test('deleting an activity leaves its completed sessions in history', async () => {
+  const db = client(); await seed(db);
+  const id = await startTimer(db, 'alice', 'work', null); await stopTimer(db, 'alice', id);
+  await deleteActivity(db, 'alice', 'work');
+  assert.equal((await getDoc(doc(db, 'users/alice/activities/work'))).exists(), false);
+  assert.equal((await getDoc(session(db, id))).data().name, 'Work');
+});
+test('an active activity cannot be deleted', async () => {
+  const db = client(); await seed(db); await startTimer(db, 'alice', 'work', null);
+  await assert.rejects(deleteActivity(db, 'alice', 'work'), /Stop this timer/);
+  await assertFails(deleteDoc(doc(db, 'users/alice/activities/work')));
+});
+test('activity updates cannot change colour or bypass name validation', async () => {
+  const db = client(); await seed(db);
+  const ref = doc(db, 'users/alice/activities/work');
+  await assertFails(updateDoc(ref, {color: '#b36480'}));
+  await assertFails(updateDoc(ref, {name: ''}));
 });
 test('rules deny a second running session without closing the first', async () => {
   const db = client(); await seed(db); await startTimer(db, 'alice', 'work', null);

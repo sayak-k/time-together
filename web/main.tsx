@@ -4,7 +4,7 @@ import { createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEm
 import type { User } from 'firebase/auth';
 import { collection, doc, getDocsFromServer, limit, onSnapshot, orderBy, query, Timestamp, where } from 'firebase/firestore';
 import { auth, db, configured } from './firebase';
-import { createActivity, startTimer, stopTimer } from './cloud';
+import { createActivity, deleteActivity, renameActivity, startTimer, stopTimer } from './cloud';
 import './style.css';
 
 type Activity = {id: string; name: string; color: string};
@@ -126,6 +126,43 @@ function DailyActivityChart({sessions, now}: {sessions: Session[]; now: number})
     </div>
   </figure>;
 }
+
+function ActivityCard({activity, isActive, anotherActive, disabled, onStart, onRename, onDelete}: {
+  activity: Activity;
+  isActive: boolean;
+  anotherActive: boolean;
+  disabled: boolean;
+  onStart: () => Promise<boolean>;
+  onRename: (name: string) => Promise<boolean>;
+  onDelete: () => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(activity.name);
+
+  if (editing) return <article className={`activity-card is-editing ${isActive ? 'is-active' : ''}`} style={{'--activity': activity.color} as React.CSSProperties}>
+    <form className="activity-edit-form" onSubmit={async event => {
+      event.preventDefault();
+      if (await onRename(draftName)) setEditing(false);
+    }}>
+      <label>Activity name<input autoFocus required maxLength={80} value={draftName} onChange={event => setDraftName(event.target.value)}/></label>
+      <div className="activity-edit-actions"><button className="activity-save-button" disabled={disabled}>Save</button><button type="button" className="activity-cancel-button" disabled={disabled} onClick={() => setEditing(false)}>Cancel</button></div>
+      <button type="button" className="activity-delete-button" disabled={disabled || isActive} onClick={async () => {
+        if (!window.confirm(`Delete “${activity.name}”? Its historical logs will stay.`)) return;
+        if (await onDelete()) setEditing(false);
+      }}>Delete activity</button>
+      {isActive && <p className="activity-delete-note">Stop this timer before deleting the activity.</p>}
+    </form>
+  </article>;
+
+  return <article className={`activity-card ${isActive ? 'is-active' : ''}`} style={{'--activity': activity.color} as React.CSSProperties}>
+    <button className="activity-start-button" disabled={disabled || isActive} onClick={onStart}>
+      <span className="activity-icon">{activity.name.slice(0, 1).toUpperCase()}</span>
+      <strong>{activity.name}</strong>
+      <span className="activity-action">{isActive ? 'In progress' : anotherActive ? 'Switch to activity ↗' : 'Start activity ↗'}</span>
+    </button>
+    <button className="activity-manage-button" disabled={disabled} aria-label={`Rename or delete ${activity.name}`} onClick={() => {setDraftName(activity.name); setEditing(true);}}>Edit</button>
+  </article>;
+}
 function friendly(error: unknown) {
   const e = error as {code?: string; message?: string};
   if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'].includes(e.code ?? '')) return 'The email or password is incorrect.';
@@ -195,9 +232,9 @@ function App() {
   }, [user, chartDayKey]);
 
   async function perform(action: () => Promise<unknown>) {
-    if (busy) return;
+    if (busy) return false;
     setBusy(true); setError(''); setNotice('');
-    try {await action();} catch (e) {setError(friendly(e));} finally {setBusy(false);}
+    try {await action(); return true;} catch (e) {setError(friendly(e)); return false;} finally {setBusy(false);}
   }
   const active = sessions.find(s => s.id === activeId);
   const ready = online && Object.values(confirmed).every(Boolean) && (!activeId || Boolean(active?.startedAt));
@@ -243,7 +280,7 @@ function App() {
       </section>
       <section className="activities-section"><div className="section-title"><div><h2>Your activities</h2><p>One thing at a time. Switch whenever you need.</p></div><button className="outline-button" disabled={!ready || busy} onClick={() => setAdding(!adding)}>{adding ? 'Cancel' : '+ Add activity'}</button></div>
         {adding && <form className="add-form" onSubmit={e => {e.preventDefault(); perform(async () => {await createActivity(db!, user.uid, name, color); setName(''); setAdding(false);});}}><label>Activity name<input value={name} maxLength={80} required placeholder="Reading, work, a walk…" onChange={e => setName(e.target.value)}/></label><fieldset><legend>Colour</legend><div className="swatches">{colours.map(c => <button type="button" key={c} aria-label={`Choose colour ${c}`} aria-pressed={color === c} className={color === c ? 'selected' : ''} style={{background: c}} onClick={() => setColor(c)}/>)}</div></fieldset><button className="primary" disabled={busy || !ready}>Add activity</button></form>}
-        {activities.length ? <><label className="note-input">A note for your next session <span>optional</span><input maxLength={2000} placeholder="What are you working on?" value={note} onChange={e => setNote(e.target.value)}/></label><div className="activity-grid">{activities.map(a => <button key={a.id} className={`activity-card ${active?.activityId === a.id ? 'is-active' : ''}`} style={{'--activity': a.color} as React.CSSProperties} disabled={busy || !ready || active?.activityId === a.id} onClick={() => perform(async () => {await startTimer(db!, user.uid, a.id, activeId, note); setNote('');})}><span className="activity-icon">{a.name.slice(0, 1).toUpperCase()}</span><strong>{a.name}</strong><span className="activity-action">{active?.activityId === a.id ? 'In progress' : active ? 'Switch to activity ↗' : 'Start activity ↗'}</span></button>)}</div></>
+        {activities.length ? <><label className="note-input">A note for your next session <span>optional</span><input maxLength={2000} placeholder="What are you working on?" value={note} onChange={e => setNote(e.target.value)}/></label><div className="activity-grid">{activities.map(a => <ActivityCard key={a.id} activity={a} isActive={active?.activityId === a.id} anotherActive={Boolean(active)} disabled={busy || !ready} onStart={() => perform(async () => {await startTimer(db!, user.uid, a.id, activeId, note); setNote('');})} onRename={nextName => perform(() => renameActivity(db!, user.uid, a.id, nextName))} onDelete={() => perform(() => deleteActivity(db!, user.uid, a.id))}/>)}</div></>
         : <div className="empty-state"><span>＋</span><h3>A little space for your day</h3><p>Add your first activity, or import activities from the Android app.</p></div>}
       </section>
       <section className="history-section"><div className="section-title"><div><h2>Recently tracked</h2><p>Your latest 100 sessions · Today: {duration(todayTotal)}</p></div><button className="text-button" disabled={busy || !ready} onClick={() => perform(exportHistory)}>Export all history ↓</button></div>

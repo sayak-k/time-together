@@ -156,9 +156,7 @@ class FirebaseTimerSync @Inject constructor(
                 if (snapshot != null && !snapshot.metadata.isFromCache) scope.launch {
                     try { projectionMutex.withLock {
                         if (token != generation) return@withLock
-                        withContext(Dispatchers.IO) {
-                            snapshot.documents.forEach { ensureType(uid, it.id, it.getString("name")!!, it.getString("color")!!) }
-                        }
+                        withContext(Dispatchers.IO) { syncActivities(uid, snapshot) }
                         updates.send()
                     } } catch (e: Exception) { fail(e) }
                 }
@@ -321,6 +319,32 @@ class FirebaseTimerSync @Inject constructor(
         }
         rememberType(uid, cloudId, id)
         return id
+    }
+
+    private suspend fun syncType(uid: String, cloudId: String, name: String, color: String) {
+        val key = "type:$uid:$cloudId"
+        val id = prefs.getLong(key, stableId(key))
+        val existing = types.get(id)
+        val syncedColor = AppColor(0, Color.parseColor(color).toString())
+        val projected = existing?.copy(name = name, icon = name.take(1), color = syncedColor, hidden = false)
+            ?: RecordType(id, name, name.take(1), syncedColor, 0L, "Synced activity")
+        if (projected != existing) types.add(projected)
+        rememberType(uid, cloudId, id)
+    }
+
+    private suspend fun syncActivities(uid: String, snapshot: QuerySnapshot) {
+        val cloudIds = snapshot.documents.map { it.id }.toSet()
+        snapshot.documents.forEach { syncType(uid, it.id, it.getString("name")!!, it.getString("color")!!) }
+        val prefix = "type:$uid:"
+        prefs.all.keys.asSequence().filter { it.startsWith(prefix) }.map { it.removePrefix(prefix) }
+            .filter { it !in cloudIds }.forEach { archiveType(uid, it) }
+    }
+
+    private suspend fun archiveType(uid: String, cloudId: String) {
+        val key = "type:$uid:$cloudId"
+        if (!prefs.contains(key)) return
+        val id = prefs.getLong(key, stableId(key))
+        if (types.get(id) != null) types.archive(id)
     }
 
     private fun rememberType(uid: String, cloudId: String, id: Long) {

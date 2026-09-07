@@ -1,4 +1,4 @@
-import { collection, doc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
 import type { Firestore } from 'firebase/firestore';
 
 // Rules that validate both halves of a transition can reject a racing commit
@@ -23,6 +23,30 @@ export async function createActivity(db: Firestore, uid: string, name: string, c
     if (!state.exists()) tx.set(stateRef, {activeSessionId: null, revision: 0, updatedAt: serverTimestamp()});
   });
   return id;
+}
+
+export async function renameActivity(db: Firestore, uid: string, activityId: string, name: string) {
+  const cleanName = name.trim();
+  if (!cleanName || cleanName.length > 80) throw new Error('Enter a name up to 80 characters.');
+  await updateDoc(doc(db, 'users', uid, 'activities', activityId), {name: cleanName});
+}
+
+export async function deleteActivity(db: Firestore, uid: string, activityId: string) {
+  const activityRef = doc(db, 'users', uid, 'activities', activityId);
+  const stateRef = doc(db, 'users', uid, 'state', 'timer');
+  await runTransaction(db, async tx => {
+    const activity = await tx.get(activityRef);
+    const state = await tx.get(stateRef);
+    if (!activity.exists()) return;
+    const activeSessionId: string | null = state.data()?.activeSessionId ?? null;
+    if (activeSessionId) {
+      const activeSession = await tx.get(doc(db, 'users', uid, 'sessions', activeSessionId));
+      if (activeSession.data()?.activityId === activityId) {
+        throw new Error('Stop this timer before deleting its activity.');
+      }
+    }
+    tx.delete(activityRef);
+  });
 }
 
 export async function startTimer(db: Firestore, uid: string, activityId: string, expectedActive: string | null, comment = '', requestId = crypto.randomUUID()) {
